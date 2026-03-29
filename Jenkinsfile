@@ -1,17 +1,17 @@
 pipeline {
-    agent { label 'maven-agent' }
+    agent { label 'slave' }
 
     environment {
-        APP_SERVER_IP   = '172.31.76.1'
-        APP_SERVER_USER = 'ubuntu'
-        DEPLOY_DIR      = '/opt/application'
+        APP_SERVER_IP = '172.31.76.1'
     }
 
     stages {
 
         stage('Checkout Code') {
             steps {
-                checkout scm
+                git branch: env.BRANCH_NAME,
+                    credentialsId: 'github-cred',
+                    url: 'https://github.com/MadhavKiran/jenkins-maven.git'
             }
         }
 
@@ -28,18 +28,14 @@ pipeline {
 
         stage('Security Scan - Trivy') {
             steps {
-                sh '''
-		   trivy fs --exit-code 1 --severity CRITICAL \
-                     --format table .
-                       '''
-                
+                sh 'trivy fs --exit-code 1 --severity CRITICAL --format table .'
             }
         }
+
         stage('Package') {
             steps {
                 sh 'mvn package -DskipTests'
-                archiveArtifacts artifacts: 'target/*.jar',
-                    fingerprint: true
+                archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
             }
         }
 
@@ -48,16 +44,10 @@ pipeline {
                 branch 'main'
             }
             steps {
-                sshagent(credentials: ['application server-ssh']) { {
+                sshagent(['app-server-ssh']) {
                     sh '''
-                        scp -o StrictHostKeyChecking=no \
-                            target/*.jar \
-                            ubuntu@''' + env.APP_SERVER_IP + ''':/opt/application/app.jar
-                    '''
-                    sh '''
-                        ssh -o StrictHostKeyChecking=no \
-                            ubuntu@''' + env.APP_SERVER_IP + ''' \
-                            "cd /opt/application && nohup java -jar app.jar > app.log 2>&1 &"
+                        scp -o StrictHostKeyChecking=no target/*.jar ubuntu@172.31.76.1:/opt/application/app.jar
+                        ssh -o StrictHostKeyChecking=no ubuntu@172.31.76.1 "pkill -f app.jar || true && nohup java -jar /opt/application/app.jar > /opt/application/app.log 2>&1 &"
                     '''
                 }
             }
