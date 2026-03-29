@@ -48,7 +48,7 @@ pipeline {
                 branch 'main'
             }
             steps {
-                sshagent(credentials: ['app-server-ssh']) {
+                sshagent(credentials: ['application server-ssh']) { {
                     sh '''
                         scp -o StrictHostKeyChecking=no \
                             target/*.jar \
