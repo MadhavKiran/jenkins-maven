@@ -1,20 +1,16 @@
 pipeline {
     agent { label 'slave' }
-
     environment {
-        APP_SERVER_IP = '172.31.76.1'
+        APP_SERVER_IP   = '172.31.76.1'
+        APP_SERVER_USER = 'ubuntu'
+        DEPLOY_DIR      = '/opt/application'
     }
-
     stages {
-
         stage('Checkout Code') {
             steps {
-                git branch: env.BRANCH_NAME,
-                    credentialsId: 'github-cred',
-                    url: 'https://github.com/MadhavKiran/jenkins-maven.git'
+                checkout scm
             }
         }
-
         stage('Build & Test') {
             steps {
                 sh 'mvn clean test'
@@ -25,41 +21,59 @@ pipeline {
                 }
             }
         }
-
-        stage('Security Scan - Trivy') {
+        stage('SonarQube Analysis') {
             steps {
-                sh 'trivy fs --exit-code 1 --severity CRITICAL --format table .'
+                withSonarQubeEnv('SonarQube') {
+                    sh 'mvn sonar:sonar'
+                }
             }
         }
-
+        stage('Security Scan - Trivy') {
+            steps {
+                sh '''
+                    if ! command -v trivy &> /dev/null; then
+                        sudo apt-get install -y wget apt-transport-https gnupg
+                        wget -qO - https://aquasecurity.github.io/trivy-repo/deb/public.key | sudo apt-key add -
+                        echo "deb https://aquasecurity.github.io/trivy-repo/deb $(lsb_release -sc) main" | sudo tee /etc/apt/sources.list.d/trivy.list
+                        sudo apt-get update
+                        sudo apt-get install -y trivy
+                    fi
+                '''
+                sh 'trivy fs --exit-code 1 --severity CRITICAL .'
+            }
+        }
         stage('Package') {
             steps {
                 sh 'mvn package -DskipTests'
                 archiveArtifacts artifacts: 'target/*.jar', fingerprint: true
             }
         }
-
         stage('Deploy to App Server') {
             when {
                 branch 'main'
             }
             steps {
-                sshagent(['app-server-ssh']) {
-                    sh '''
-                        scp -o StrictHostKeyChecking=no target/*.jar ubuntu@172.31.76.1:/opt/application/app.jar
-                        ssh -o StrictHostKeyChecking=no ubuntu@172.31.76.1 "pkill -f app.jar || true && nohup java -jar /opt/application/app.jar > /opt/application/app.log 2>&1 &"
-                    '''
+                sshagent(credentials: ['app-server-ssh']) {
+                    sh """
+                        scp -o StrictHostKeyChecking=no target/*.jar ${APP_SERVER_USER}@${APP_SERVER_IP}:${DEPLOY_DIR}/app.jar
+                    """
+                    sh """
+                        ssh -o StrictHostKeyChecking=no ${APP_SERVER_USER}@${APP_SERVER_IP} 'cd ${DEPLOY_DIR} && nohup java -jar app.jar > app.log 2>&1 &'
+                    """
                 }
             }
         }
     }
-
     post {
         success {
-            echo 'Pipeline completed successfully!'
+            mail to: 'kiranmadhav2001@gmail.com',
+                 subject: "SUCCESS: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                 body: "Build succeeded.\nCheck: ${env.BUILD_URL}"
         }
         failure {
-            echo 'Pipeline failed. Check logs.'
+            mail to: 'kiranmadhav2001@gmail.com',
+                 subject: "FAILED: ${env.JOB_NAME} #${env.BUILD_NUMBER}",
+                 body: "Build failed.\nCheck: ${env.BUILD_URL}"
         }
     }
 }
